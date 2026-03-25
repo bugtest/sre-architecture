@@ -3,12 +3,13 @@
 """
 民事起诉状自动填写工具 - 专业版
 
-支持本地 OCR 和腾讯云 OCR 双模式，自动填写民事起诉状。
+支持本地 OCR、腾讯云 OCR 和大模型智能提取，自动填写民事起诉状。
 
 用法:
     python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx
     python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx --ocr-mode tencent
     python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx --ocr-mode hybrid
+    python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx --extract-mode llm
 """
 
 import argparse
@@ -32,6 +33,13 @@ try:
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
+
+# 大模型 API 支持
+try:
+    import requests
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
 
 # 第三方库
 try:
@@ -739,6 +747,156 @@ def load_config() -> Optional[Dict]:
     return None
 
 
+class LLMCaseInfoExtractor:
+    """使用大模型从 OCR 文本中提取案件信息"""
+    
+    def __init__(self, ocr_text: str, llm_config: Dict):
+        self.ocr_text = ocr_text
+        self.llm_config = llm_config
+        self.info = {
+            '合同编号': '',
+            '原告名称': '',
+            '被告姓名': '',
+            '被告证件号码': '',
+            '被告联系电话': '',
+            '借款金额': '',
+            '借款金额大写': '',
+            '借款期限': '',
+            '合同签订日期': '',
+            '提款日期': '',
+            '到期日期': '',
+            '利率': '',
+            '还款方式': '',
+        }
+    
+    def extract(self) -> Dict[str, str]:
+        """使用大模型提取信息"""
+        print(f"   🤖 正在使用大模型提取信息...")
+        
+        # 构建提示词
+        prompt = self._build_prompt()
+        
+        # 调用大模型 API
+        result = self._call_llm(prompt)
+        
+        if result:
+            # 解析结果
+            self._parse_result(result)
+            print(f"   ✓ 大模型提取完成，共 {len([v for v in self.info.values() if v])} 项信息")
+        
+        return self.info
+    
+    def _build_prompt(self) -> str:
+        """构建提示词"""
+        return f"""你是一名法律文档信息提取专家。请从以下 OCR 识别文本中提取案件关键信息。
+
+OCR 识别文本：
+{self.ocr_text[:8000]}  # 限制长度
+
+请提取以下字段（如果找不到就留空）：
+1. 合同编号
+2. 原告名称（贷款人/银行全称）
+3. 被告姓名（借款人）
+4. 被告证件号码（身份证号）
+5. 被告联系电话（手机号）
+6. 借款金额（数字，单位元）
+7. 借款期限（月数）
+8. 合同签订日期
+9. 提款日期
+10. 到期日期
+11. 利率（如 LPR+60 基点）
+12. 还款方式
+
+请严格按照以下 JSON 格式返回：
+{{
+    "合同编号": "",
+    "原告名称": "",
+    "被告姓名": "",
+    "被告证件号码": "",
+    "被告联系电话": "",
+    "借款金额": "",
+    "借款期限": "",
+    "合同签订日期": "",
+    "提款日期": "",
+    "到期日期": "",
+    "利率": "",
+    "还款方式": ""
+}}
+
+只返回 JSON，不要其他内容。"""
+    
+    def _call_llm(self, prompt: str) -> Optional[Dict]:
+        """调用大模型 API"""
+        provider = self.llm_config.get('provider', 'aliyun')
+        
+        if provider == 'aliyun':
+            return self._call_aliyun(prompt)
+        elif provider == 'tencent':
+            return self._call_tencent(prompt)
+        else:
+            print(f"   ⚠️ 不支持的大模型提供商：{provider}")
+            return None
+    
+    def _call_aliyun(self, prompt: str) -> Optional[Dict]:
+        """调用阿里云百炼大模型"""
+        api_key = self.llm_config.get('api_key', '')
+        model = self.llm_config.get('model', 'qwen-plus')
+        
+        if not api_key:
+            print(f"   ⚠️ 阿里云 API Key 未配置")
+            return None
+        
+        url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+        
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            "model": model,
+            "input": {
+                "messages": [
+                    {"role": "system", "content": "你是一个专业的法律文档信息提取助手，只返回 JSON 格式的结果。"},
+                    {"role": "user", "content": prompt}
+                ]
+            },
+            "parameters": {
+                "temperature": 0.1,
+                "max_tokens": 1000
+            }
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            
+            if 'output' in result and 'text' in result['output']:
+                text = result['output']['text']
+                # 提取 JSON
+                json_match = re.search(r'\{[^}]+\}', text, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+            
+            return None
+        except Exception as e:
+            print(f"   ⚠️ 阿里云 API 调用失败：{e}")
+            return None
+    
+    def _call_tencent(self, prompt: str) -> Optional[Dict]:
+        """调用腾讯云大模型"""
+        # 暂不实现，可根据需要添加
+        print(f"   ⚠️ 腾讯云大模型暂未支持")
+        return None
+    
+    def _parse_result(self, result: Dict):
+        """解析大模型返回的结果"""
+        for key in self.info.keys():
+            if key in result and result[key]:
+                self.info[key] = str(result[key]).strip()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='民事起诉状自动填写工具 - 专业版',
@@ -767,6 +925,13 @@ def main():
     parser.add_argument('-o', '--output', required=True, help='输出文件路径')
     parser.add_argument('--ocr-mode', choices=['local', 'aliyun', 'tencent', 'hybrid'], default='local',
                        help='OCR 模式：local(本地) / tencent(腾讯云) / aliyun(阿里云) / hybrid(混合)')
+    parser.add_argument('--extract-mode', choices=['regex', 'llm'], default='regex',
+                       help='信息提取模式：regex(正则) / llm(大模型)')
+    parser.add_argument('--llm-provider', default='aliyun',
+                       help='大模型提供商：aliyun(阿里云百炼)')
+    parser.add_argument('--llm-api-key', help='大模型 API Key')
+    parser.add_argument('--llm-model', default='qwen-plus',
+                       help='大模型型号')
     parser.add_argument('--tencent-secret-id', help='腾讯云 Secret ID')
     parser.add_argument('--tencent-secret-key', help='腾讯云 Secret Key')
     parser.add_argument('--tencent-region', default='ap-guangzhou',
@@ -846,8 +1011,19 @@ def main():
         sys.exit(1)
     
     # 2. 提取案件信息
-    info_extractor = CaseInfoExtractor(ocr_text, ocr_mode=args.ocr_mode)
-    case_info = info_extractor.extract()
+    if args.extract_mode == 'llm':
+        # 使用大模型提取
+        llm_config = config.get('llm', {}) if config else {}
+        llm_config['provider'] = args.llm_provider
+        llm_config['api_key'] = args.llm_api_key or llm_config.get('api_key', '')
+        llm_config['model'] = args.llm_model or llm_config.get('model', 'qwen-plus')
+        
+        info_extractor = LLMCaseInfoExtractor(ocr_text, llm_config)
+        case_info = info_extractor.extract()
+    else:
+        # 使用正则提取
+        info_extractor = CaseInfoExtractor(ocr_text, ocr_mode=args.ocr_mode)
+        case_info = info_extractor.extract()
     
     # 显示提取的信息
     print("\n📋 提取的案件信息:")

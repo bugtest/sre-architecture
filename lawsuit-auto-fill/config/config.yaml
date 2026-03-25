@@ -12,8 +12,17 @@ aliyun:
   access_key_secret: YOUR_ACCESS_KEY_SECRET
   endpoint: ocr.cn-shanghai.aliyuncs.com
 
+# 大模型配置（用于智能信息提取）
+llm:
+  provider: aliyun  # aliyun(阿里云百炼)
+  api_key: YOUR_DASHSCOPE_API_KEY
+  model: qwen-plus  # qwen-plus / qwen-max
+
 # 默认 OCR 模式：local / tencent / hybrid
 default_ocr_mode: hybrid
+
+# 默认提取模式：regex / llm
+default_extract_mode: regex
 
 # 本地 OCR 配置
 local:

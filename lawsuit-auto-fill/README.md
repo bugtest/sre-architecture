@@ -105,6 +105,26 @@ python src/lawsuit_filler.py \
 2. `config.yaml`
 3. `~/.config/lawsuit-filler/config.yaml`
 
+### 模式五：大模型智能提取（最高精度⭐⭐⭐）
+
+使用阿里云百炼大模型理解文档语义，提取准确率最高。
+
+```bash
+python src/lawsuit_filler.py \
+    --pdf 证据.pdf \
+    --template 模板.docx \
+    --output 输出.docx \
+    --ocr-mode hybrid \
+    --extract-mode llm \
+    --llm-api-key YOUR_DASHSCOPE_API_KEY
+```
+
+**大模型优势：**
+- 🧠 理解语义，不依赖固定格式
+- 📊 自动处理模糊/潦草文字
+- 🎯 准确识别原告名称等复杂字段
+- 💰 支持多种合同格式
+
 ---
 
 ## 📋 参数说明
