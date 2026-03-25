@@ -17,9 +17,13 @@ import re
 import shutil
 import json
 import base64
-from datetime import datetime
+import hmac
+import hashlib
+import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
+from email.utils import formatdate
 
 # 第三方库
 try:
@@ -82,126 +86,115 @@ def init_ocr(ocr_mode: str = 'local', aliyun_config: Optional[Dict] = None):
 
 
 class AliyunOCR:
-    """阿里云 OCR 识别器"""
+    """阿里云 OCR 识别器 - 使用 HTTP API 直接调用"""
     
     def __init__(self, config: Dict):
         self.access_key_id = config['access_key_id']
         self.access_key_secret = config['access_key_secret']
         self.endpoint = config.get('endpoint', 'ocr.cn-shanghai.aliyuncs.com')
-        self.api_url = f"https://{self.endpoint}/api/v1/ocr/documents"
         
-    def _sign_request(self, params: Dict, body: bytes) -> Dict:
-        """生成阿里云签名请求头"""
-        import hmac
-        import hashlib
-        import time
-        from email.utils import formatdate
-        
-        date = formatdate(timeval=time.time(), localtime=False, usegmt=True)
-        
-        # 构建签名字符串
-        content_md5 = hashlib.md5(body).hexdigest()
-        content_type = 'application/octet-stream'
-        
-        string_to_sign = f"POST\n{content_md5}\n{content_type}\n{date}\n"
-        
-        # 生成签名
-        h = hmac.new(
-            self.access_key_secret.encode(),
-            string_to_sign.encode(),
-            hashlib.sha1
-        )
-        signature = base64.b64encode(h.digest()).decode()
-        
-        # 构建请求头
-        headers = {
-            'Authorization': f"ACS {self.access_key_id}:{signature}",
-            'Date': date,
-            'Content-Type': content_type,
-            'Content-MD5': content_md5,
-            'Accept': 'application/json'
-        }
-        
-        return headers
-    
     def recognize_pdf(self, pdf_path: str, max_pages: int = 20) -> str:
-        """识别 PDF 文件"""
+        """识别 PDF 文件 - 使用阿里云通用文字识别 API"""
         print(f"☁️  正在使用阿里云 OCR 识别：{pdf_path}")
+        print(f"   提示：如网络超时，请检查是否开通 OCR 服务并配置白名单")
         
         try:
-            # 读取 PDF 文件
-            with open(pdf_path, 'rb') as f:
-                pdf_data = f.read()
-            
-            # 构建请求参数
-            params = {
-                'Action': 'RecognizeDocumentText',
-                'Version': '2021-07-07',
-                'Timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-                'Format': 'JSON',
-                'SignatureMethod': 'HMAC-SHA1',
-                'SignatureVersion': '1.0',
-                'SignatureNonce': str(datetime.utcnow().timestamp()),
-                'AccessKeyId': self.access_key_id
-            }
-            
-            # 简化版：直接调用 API
-            headers = {
-                'Content-Type': 'application/octet-stream',
-                'Accept': 'application/json'
-            }
-            
-            # 使用阿里云 SDK 风格的调用
-            import hashlib
+            from pdf2image import convert_from_path
+            from io import BytesIO
             import base64
+            import json
             import time
-            from email.utils import formatdate
+            import hashlib
             
-            date = formatdate(timeval=time.time(), localtime=False, usegmt=True)
-            content_md5 = hashlib.md5(pdf_data).hexdigest()
+            # 转换 PDF 为图片
+            images = convert_from_path(pdf_path, first_page=1, last_page=max_pages, dpi=150)
+            print(f"   转换了 {len(images)} 页")
             
-            string_to_sign = f"POST\n{content_md5}\napplication/octet-stream\n{date}\n"
-            h = hmac.new(
-                self.access_key_secret.encode(),
-                string_to_sign.encode(),
-                hashlib.sha1
-            )
-            signature = base64.b64encode(h.digest()).decode()
-            
-            headers['Authorization'] = f"ACS {self.access_key_id}:{signature}"
-            headers['Date'] = date
-            headers['Content-MD5'] = content_md5
-            
-            # 发送请求
-            response = requests.post(
-                f"https://{self.endpoint}/api/v1/ocr/documents",
-                headers=headers,
-                data=pdf_data,
-                params={'type': 'pdf', 'pages': f'1-{max_pages}'}
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                print(f"   ✓ OCR 完成")
+            all_text = []
+            for i, image in enumerate(images):
+                print(f"   识别第 {i+1}/{len(images)} 页...", end="\r")
                 
-                # 解析结果
-                text_pages = []
-                if 'pages' in result:
-                    for page in result['pages']:
-                        page_text = ''
-                        if 'words' in page:
-                            for word in page['words']:
-                                page_text += word.get('content', '') + ' '
-                        text_pages.append(page_text)
+                # 转图片为 Base64
+                buffered = BytesIO()
+                image.save(buffered, format='PNG')
+                img_base64 = base64.b64encode(buffered.getvalue()).decode()
                 
-                return '\n'.join([f"=== 第 {i+1} 页 ===\n{text}" for i, text in enumerate(text_pages)])
-            else:
-                print(f"   ✗ OCR 失败：{response.status_code} - {response.text}")
-                return ""
+                # 阿里云 OCR API - 通用文字识别
+                # API 文档：https://help.aliyun.com/zh/ocr/developer-reference/api-general-ocr
+                url = f"https://{self.endpoint}/?Action=RecognizeDocumentText&Version=2021-07-07"
+                
+                # 构建签名
+                timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                nonce = str(int(time.time() * 1000000))
+                
+                # 签名参数
+                params = {
+                    'AccessKeyId': self.access_key_id,
+                    'Action': 'RecognizeDocumentText',
+                    'Format': 'JSON',
+                    'SignatureMethod': 'HMAC-SHA1',
+                    'SignatureNonce': nonce,
+                    'SignatureVersion': '1.0',
+                    'Timestamp': timestamp,
+                    'Version': '2021-07-07',
+                }
+                
+                # 构建待签名字符串
+                sorted_params = '&'.join([f"{k}={self._url_encode(v)}" for k, v in sorted(params.items())])
+                string_to_sign = f"POST&%2F&{self._url_encode(sorted_params)}"
+                
+                # 生成签名
+                h = hmac.new(
+                    (self.access_key_secret + '&').encode(),
+                    string_to_sign.encode(),
+                    hashlib.sha1
+                )
+                signature = base64.b64encode(h.digest()).decode()
+                
+                # 构建完整 URL
+                query_string = f"{sorted_params}&Signature={self._url_encode(signature)}"
+                full_url = f"https://{self.endpoint}/?{query_string}"
+                
+                # 请求体
+                headers = {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json'
+                }
+                
+                body_data = f"ImageBody={self._url_encode(img_base64)}&Scene=text_recognition"
+                
+                response = requests.post(
+                    full_url,
+                    headers=headers,
+                    data=body_data,
+                    timeout=60
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    page_text = ''
+                    if 'Data' in result and 'Pages' in result['Data']:
+                        for page in result['Data']['Pages']:
+                            if 'Words' in page:
+                                for word in page['Words']:
+                                    page_text += word.get('Content', '') + ' '
+                    all_text.append(f"=== 第 {i+1} 页 ===\n{page_text}")
+                else:
+                    print(f"\n   ✗ 第 {i+1} 页失败：{response.status_code} - {response.text[:300]}")
+            
+            print(f"   ✓ OCR 完成")
+            return "\n".join(all_text)
                 
         except Exception as e:
             print(f"   ✗ OCR 失败：{e}")
+            import traceback
+            traceback.print_exc()
             return ""
+    
+    def _url_encode(self, value: str) -> str:
+        """URL 编码"""
+        import urllib.parse
+        return urllib.parse.quote(str(value), safe='')
 
 
 class PDFOCRExtractor:
