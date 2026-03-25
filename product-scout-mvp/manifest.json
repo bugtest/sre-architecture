@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "ProductScout AI - 智能电商选品助手",
+  "version": "0.1.0",
+  "description": "用 AI 驱动跨境电商选品决策，3 分钟完成竞品分析，自动计算利润空间",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup/index.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "ProductScout AI"
+  },
+  "background": {
+    "service_worker": "background/service.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.amazon.com/*",
+        "*://www.amazon.co.uk/*",
+        "*://www.amazon.de/*",
+        "*://www.amazon.fr/*",
+        "*://www.amazon.co.jp/*",
+        "*://www.1688.com/*",
+        "*://detail.1688.com/*"
+      ],
+      "js": ["content/injector.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://www.amazon.com/*",
+    "*://www.amazon.co.uk/*",
+    "*://www.amazon.de/*",
+    "*://www.amazon.fr/*",
+    "*://www.amazon.co.jp/*",
+    "*://www.1688.com/*",
+    "*://detail.1688.com/*",
+    "http://127.0.0.1:18789/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

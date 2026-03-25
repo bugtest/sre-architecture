@@ -1,0 +1,5 @@
+# 腾讯企业邮 SASL 认证配置
+# 格式：[服务器]:端口 用户名：密码
+
+# 请修改下面的密码为你的腾讯企业邮密码或授权码
+[smtp.exmail.qq.com]:465 me@chenggang.wang:YOUR_PASSWORD_HERE
