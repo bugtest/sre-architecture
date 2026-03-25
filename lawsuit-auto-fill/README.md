@@ -81,6 +81,30 @@ python src/lawsuit_filler.py \
     --tencent-secret-key YOUR_SECRET_KEY
 ```
 
+### 模式四：使用配置文件（最方便⭐⭐）
+
+创建配置文件后，无需每次输入密钥：
+
+```bash
+# 创建配置文件
+cp config/config.example.yaml config/config.yaml
+
+# 编辑配置文件，填入你的密钥
+vim config/config.yaml
+
+# 使用配置文件（自动加载）
+python src/lawsuit_filler.py \
+    --pdf 证据.pdf \
+    --template 模板.docx \
+    --output 输出.docx \
+    --ocr-mode hybrid
+```
+
+**配置文件位置（优先级从高到低）：**
+1. `config/config.yaml`
+2. `config.yaml`
+3. `~/.config/lawsuit-filler/config.yaml`
+
 ---
 
 ## 📋 参数说明

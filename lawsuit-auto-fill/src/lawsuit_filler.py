@@ -3,11 +3,12 @@
 """
 民事起诉状自动填写工具 - 专业版
 
-支持本地 OCR 和阿里云 OCR 双模式，自动填写民事起诉状。
+支持本地 OCR 和腾讯云 OCR 双模式，自动填写民事起诉状。
 
 用法:
     python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx
-    python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx --ocr-mode aliyun
+    python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx --ocr-mode tencent
+    python lawsuit_filler.py --pdf 证据.pdf --template 模板.docx --output 输出.docx --ocr-mode hybrid
 """
 
 import argparse
@@ -24,6 +25,13 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 from email.utils import formatdate
+
+# 配置文件支持
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
 
 # 第三方库
 try:
@@ -705,6 +713,32 @@ class LawsuitFiller:
         return filled
 
 
+def load_config() -> Optional[Dict]:
+    """加载配置文件"""
+    if not YAML_AVAILABLE:
+        return None
+    
+    # 可能的配置文件路径
+    config_paths = [
+        'config/config.yaml',
+        'config.yaml',
+        '../config/config.yaml',
+        os.path.expanduser('~/.config/lawsuit-filler/config.yaml'),
+    ]
+    
+    for config_path in config_paths:
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    print(f"📄 已加载配置文件：{config_path}")
+                    return config
+            except Exception as e:
+                print(f"⚠️  配置文件加载失败：{e}")
+    
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='民事起诉状自动填写工具 - 专业版',
@@ -761,29 +795,38 @@ def main():
     print(f"OCR 模式：{args.ocr_mode}")
     print("="*60)
     
-    # 初始化 OCR 配置
+    # 加载配置文件
+    config = load_config()
+    
+    # 初始化 OCR 配置（优先级：命令行 > 环境变量 > 配置文件）
     aliyun_config = None
     tencent_config = None
     
     if args.ocr_mode == 'aliyun':
         aliyun_config = {
-            'access_key_id': args.aliyun_key_id or os.environ.get('ALIYUN_ACCESS_KEY_ID'),
-            'access_key_secret': args.aliyun_key_secret or os.environ.get('ALIYUN_ACCESS_KEY_SECRET'),
-            'endpoint': args.aliyun_endpoint
+            'access_key_id': args.aliyun_key_id or os.environ.get('ALIYUN_ACCESS_KEY_ID') or (config.get('aliyun', {}).get('access_key_id') if config else ''),
+            'access_key_secret': args.aliyun_key_secret or os.environ.get('ALIYUN_ACCESS_KEY_SECRET') or (config.get('aliyun', {}).get('access_key_secret') if config else ''),
+            'endpoint': args.aliyun_endpoint or (config.get('aliyun', {}).get('endpoint') if config else 'ocr.cn-shanghai.aliyuncs.com')
         }
     elif args.ocr_mode == 'tencent':
         tencent_config = {
-            'secret_id': args.tencent_secret_id or os.environ.get('TENCENT_SECRET_ID'),
-            'secret_key': args.tencent_secret_key or os.environ.get('TENCENT_SECRET_KEY'),
-            'region': args.tencent_region
+            'secret_id': args.tencent_secret_id or os.environ.get('TENCENT_SECRET_ID') or (config.get('tencent', {}).get('secret_id') if config else ''),
+            'secret_key': args.tencent_secret_key or os.environ.get('TENCENT_SECRET_KEY') or (config.get('tencent', {}).get('secret_key') if config else ''),
+            'region': args.tencent_region or (config.get('tencent', {}).get('region') if config else 'ap-guangzhou')
         }
     elif args.ocr_mode == 'hybrid':
         # 混合模式需要腾讯云 OCR 配置
         tencent_config = {
-            'secret_id': args.tencent_secret_id or os.environ.get('TENCENT_SECRET_ID'),
-            'secret_key': args.tencent_secret_key or os.environ.get('TENCENT_SECRET_KEY'),
-            'region': args.tencent_region
+            'secret_id': args.tencent_secret_id or os.environ.get('TENCENT_SECRET_ID') or (config.get('tencent', {}).get('secret_id') if config else ''),
+            'secret_key': args.tencent_secret_key or os.environ.get('TENCENT_SECRET_KEY') or (config.get('tencent', {}).get('secret_key') if config else ''),
+            'region': args.tencent_region or (config.get('tencent', {}).get('region') if config else 'ap-guangzhou')
         }
+    
+    # 加载本地 OCR 配置
+    if config and 'local' in config:
+        args.lang = args.lang or config['local'].get('lang', 'chi_sim+eng')
+        args.dpi = args.dpi or config['local'].get('dpi', 200)
+        args.max_pages = args.max_pages or config['local'].get('max_pages', 20)
     
     ocr_deps = init_ocr(args.ocr_mode, aliyun_config, tencent_config)
     
